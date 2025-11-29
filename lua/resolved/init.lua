@@ -213,11 +213,20 @@ function M._debounced_scan(bufnr)
 
   local cfg = config.get()
 
-  -- Cancel existing timer for this buffer
+  -- Clean up existing timer safely
   local existing = M._debounce_timers[bufnr]
-  if existing and not existing:is_closing() then
-    existing:stop()
-    existing:close()
+  if existing then
+    -- Use pcall to handle race condition where timer might be closing
+    pcall(function()
+      if not existing:is_closing() then
+        existing:stop()
+      end
+    end)
+    pcall(function()
+      if not existing:is_closing() then
+        existing:close()
+      end
+    end)
   end
 
   -- Create new timer
@@ -230,6 +239,11 @@ function M._debounced_scan(bufnr)
     M._debounce_timers[bufnr] = nil
 
     vim.schedule(function()
+      -- Recheck buffer validity inside schedule
+      if not vim.api.nvim_buf_is_valid(bufnr) then
+        M._debounce_timers[bufnr] = nil
+        return
+      end
       M._scan_buffer(bufnr)
     end)
   end)
