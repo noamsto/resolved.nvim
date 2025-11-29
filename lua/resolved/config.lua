@@ -77,9 +77,72 @@ M.defaults = {
 ---@type resolved.Config
 M.current = vim.deepcopy(M.defaults)
 
+---Validate user configuration
+---@param user_config resolved.Config?
+---@return boolean ok
+---@return string? error
+local function validate_config(user_config)
+  if user_config == nil then
+    return true, nil
+  end
+
+  if type(user_config) ~= "table" then
+    return false, "config must be a table"
+  end
+
+  -- Validate cache_ttl
+  if user_config.cache_ttl ~= nil then
+    if type(user_config.cache_ttl) ~= "number" then
+      return false, "cache_ttl must be a number"
+    end
+    if user_config.cache_ttl <= 0 then
+      return false, "cache_ttl must be positive"
+    end
+  end
+
+  -- Validate debounce_ms
+  if user_config.debounce_ms ~= nil then
+    if type(user_config.debounce_ms) ~= "number" then
+      return false, "debounce_ms must be a number"
+    end
+    if user_config.debounce_ms < 0 then
+      return false, "debounce_ms must be non-negative"
+    end
+  end
+
+  -- Validate enabled
+  if user_config.enabled ~= nil then
+    if type(user_config.enabled) ~= "boolean" then
+      return false, "enabled must be a boolean"
+    end
+  end
+
+  -- Validate icons
+  if user_config.icons ~= nil then
+    if type(user_config.icons) ~= "table" then
+      return false, "icons must be a table"
+    end
+  end
+
+  -- Validate tier_priority
+  if user_config.tier_priority ~= nil then
+    if type(user_config.tier_priority) ~= "table" then
+      return false, "tier_priority must be a table"
+    end
+  end
+
+  return true, nil
+end
+
 ---Merge user config with defaults
 ---@param user_config? resolved.Config
 function M.setup(user_config)
+  -- Validate configuration
+  local ok, err = validate_config(user_config)
+  if not ok then
+    error(string.format("[resolved.nvim] Invalid configuration: %s", err))
+  end
+
   M.current = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), user_config or {})
 end
 
