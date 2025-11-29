@@ -15,35 +15,71 @@ local _auth_checked = nil
 ---@type string|nil
 local _auth_error = nil
 
----Check if gh CLI is available and authenticated
----@return boolean ok
----@return string? error_message
+---Check if gh CLI is authenticated (async version)
+---@param callback fun(ok: boolean, err: string?)
+function M.check_auth_async(callback)
+  -- Check if gh exists
+  if vim.fn.executable("gh") ~= 1 then
+    callback(false, "gh CLI not found. Install from https://cli.github.com/")
+    return
+  end
+
+  Job:new({
+    command = "gh",
+    args = { "auth", "status" },
+    on_exit = function(j, code)
+      vim.schedule(function()
+        if code == 0 then
+          callback(true, nil)
+        else
+          local stderr = table.concat(j:stderr_result(), "\n")
+          local msg = "GitHub CLI not authenticated. Run: gh auth login"
+          if stderr ~= "" then
+            msg = msg .. "\n" .. stderr
+          end
+          callback(false, msg)
+        end
+      end)
+    end,
+  }):start()
+end
+
+---Check if gh CLI is available and authenticated (sync version with timeout)
+---@return boolean ok True if authenticated
+---@return string? error Error message if not authenticated
 function M.check_auth()
   -- Return cached result if already checked
   if _auth_checked ~= nil then
     return _auth_checked, _auth_error
   end
 
-  -- Check if gh exists
-  if vim.fn.executable("gh") ~= 1 then
+  local completed = false
+  local result_ok = false
+  local result_err = nil
+
+  M.check_auth_async(function(ok, err)
+    completed = true
+    result_ok = ok
+    result_err = err
+  end)
+
+  -- Wait with timeout (5 seconds)
+  local timeout_ms = 5000
+  local waited = vim.wait(timeout_ms, function()
+    return completed
+  end)
+
+  if not waited then
     _auth_checked = false
-    _auth_error = "gh CLI not found. Install from https://cli.github.com/"
+    _auth_error = "GitHub CLI auth check timed out after " .. (timeout_ms / 1000) .. " seconds"
     return _auth_checked, _auth_error
   end
 
-  -- Check if authenticated (synchronous, only runs once at setup)
-  local result = vim.fn.system("gh auth status 2>&1")
-  local exit_code = vim.v.shell_error
+  -- Cache the result
+  _auth_checked = result_ok
+  _auth_error = result_err
 
-  if exit_code ~= 0 then
-    _auth_checked = false
-    _auth_error = "gh CLI not authenticated. Run: gh auth login"
-    return _auth_checked, _auth_error
-  end
-
-  _auth_checked = true
-  _auth_error = nil
-  return true, nil
+  return result_ok, result_err
 end
 
 ---Reset auth check (for testing)
