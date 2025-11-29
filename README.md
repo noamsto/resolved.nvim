@@ -55,6 +55,12 @@ use {
 }
 ```
 
+## Security
+
+This plugin takes security seriously. All external commands are executed safely via plenary.job with proper argument separation and timeouts. URLs are validated before processing. See [SECURITY.md](docs/SECURITY.md) for details.
+
+If you discover a security vulnerability, please see our [security policy](docs/SECURITY.md#reporting-a-vulnerability).
+
 ## Configuration
 
 Default configuration (all optional):
@@ -216,6 +222,37 @@ Issues closed as "not_planned" (won't fix) are treated as open—your workaround
 Not every closed issue reference is stale. Documentation references remain valid.
 
 But when your comment says `TODO: remove when #123 is fixed` and #123 is now closed—you want to know. That's what stale keywords detect.
+
+## Development
+
+### Running Tests
+
+Tests are written using [plenary.nvim](https://github.com/nvim-lua/plenary.nvim).
+
+```bash
+# Run all tests
+nvim --headless -c "lua require('plenary.busted').run('tests/resolved/')" -c "qa"
+
+# Run specific test file
+nvim --headless -c "lua require('plenary.busted').run('tests/resolved/patterns_spec.lua')" -c "qa"
+```
+
+### Test Coverage
+
+The plugin has comprehensive test coverage including:
+- URL pattern extraction and validation
+- Multi-line comment handling
+- Async operation race conditions
+- Buffer validity checks
+- Configuration validation
+- Timer lifecycle management
+
+### Code Quality
+
+- All code follows Lua best practices
+- Type annotations using LuaLS format
+- Comprehensive error handling with logging
+- Security-first design (input validation, safe command execution)
 
 ## License
 
