@@ -346,6 +346,12 @@ local subcommands = {
     end,
     desc = "Show plugin status",
   },
+  issues = {
+    fn = function()
+      require("resolved.picker").show_issues_picker()
+    end,
+    desc = "Show all GitHub issues in workspace",
+  },
 }
 
 ---Internal: Set up user commands

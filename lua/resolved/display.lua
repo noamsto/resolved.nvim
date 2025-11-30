@@ -32,20 +32,19 @@ local function define_highlights()
     return
   end
 
-  -- Stale URL (closed + keywords): strikethrough + warning color + bold
+  -- Stale URL (closed + keywords): bold + warning color (no strikethrough)
   local warn_hl = vim.api.nvim_get_hl(0, { name = "DiagnosticWarn", link = false })
   vim.api.nvim_set_hl(0, "ResolvedStaleUrl", {
     fg = warn_hl.fg,
     bg = warn_hl.bg,
-    strikethrough = true,
     bold = true,
   })
 
-  -- Closed URL (no keywords): subtle strikethrough
+  -- Closed URL (no keywords): italic (subtle but clear)
   local comment_hl = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
   vim.api.nvim_set_hl(0, "ResolvedClosedUrl", {
     fg = comment_hl.fg,
-    strikethrough = true,
+    italic = true,
   })
 
   highlights_defined = true
