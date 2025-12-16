@@ -1,4 +1,3 @@
-local Job = require("plenary.job")
 local icons = require("resolved.icons")
 
 -- Constants
@@ -49,47 +48,32 @@ local function get_tracked_files_async(callback)
   end
   cwd = vim.fn.fnamemodify(cwd, ":p") -- Normalize to absolute path
 
-  -- Use plenary.Job to run: git ls-files with timeout
-  local job = Job:new({
-    command = "git",
-    args = { "ls-files" },
-    cwd = cwd,
-    on_exit = function(j, code, signal)
-      vim.schedule(function()
-        -- Check for timeout (signal 9 = SIGKILL from timeout)
-        if signal == 9 then
-          callback("Git command timed out", nil)
-          return
+  vim.system({ "git", "ls-files" }, { cwd = cwd, timeout = GIT_TIMEOUT_MS }, function(obj)
+    vim.schedule(function()
+      -- Check for timeout
+      if obj.signal == 9 or (obj.code == nil and obj.signal ~= nil) then
+        callback("Git command timed out", nil)
+        return
+      end
+
+      if obj.code ~= 0 then
+        local err = obj.stderr or ""
+        callback("Not a git repository: " .. err, nil)
+        return
+      end
+
+      local output = obj.stdout or ""
+      local files = {}
+
+      for rel_path in output:gmatch("[^\n]+") do
+        if rel_path ~= "" then
+          table.insert(files, vim.fn.fnamemodify(cwd .. "/" .. rel_path, ":p"))
         end
+      end
 
-        if code ~= 0 then
-          local err = table.concat(j:stderr_result(), "\n")
-          callback("Not a git repository: " .. err, nil)
-          return
-        end
-
-        local output = j:result()
-        local files = {}
-
-        for _, rel_path in ipairs(output) do
-          if rel_path ~= "" then
-            table.insert(files, vim.fn.fnamemodify(cwd .. "/" .. rel_path, ":p"))
-          end
-        end
-
-        callback(nil, files)
-      end)
-    end,
-  })
-
-  job:start()
-
-  -- Set up timeout
-  vim.defer_fn(function()
-    if job.handle and not job.handle:is_closing() then
-      job:shutdown(1, 9) -- Send SIGKILL after 1ms grace period
-    end
-  end, GIT_TIMEOUT_MS)
+      callback(nil, files)
+    end)
+  end)
 end
 
 ---Scan a file for GitHub references using treesitter (reuses scanner module)
@@ -478,7 +462,7 @@ end
 
 ---Generic picker creation with snacks.picker fallback to vim.ui.select
 ---@param items table[] Items to pick from
----@param opts {prompt: string, format_item: fun(item: table): string, format_snacks?: "text"|fun(item: table): table, on_select: fun(item: table)}
+---@param opts {prompt: string, format_item: fun(item: table): string, format_snacks?: "text"|fun(item: table): table, on_select: fun(item: table), actions?: table, win?: table}
 local function create_picker(items, opts)
   local has_snacks, snacks = pcall(require, "snacks")
 
@@ -497,6 +481,8 @@ local function create_picker(items, opts)
         end
       end,
       preview = "file",
+      actions = opts.actions,
+      win = opts.win,
       on_change = function(picker, item)
         if item and item.preview_title then
           vim.schedule(function()
@@ -570,6 +556,25 @@ local function show_picker(issues)
       }
     end,
     on_select = handle_issue_selection,
+    actions = {
+      browse = function(_, item)
+        if item and item.url then
+          vim.ui.open(item.url)
+        end
+      end,
+    },
+    win = {
+      input = {
+        keys = {
+          ["<C-o>"] = { "browse", mode = { "n", "i" }, desc = "Open in browser" },
+        },
+      },
+      list = {
+        keys = {
+          ["<C-o>"] = { "browse", desc = "Open in browser" },
+        },
+      },
+    },
   })
 end
 

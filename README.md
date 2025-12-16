@@ -27,7 +27,6 @@ When a GitHub issue you're working around gets closed, resolved.nvim lets you kn
 
 - **Neovim** `>= 0.10`
 - [GitHub CLI](https://cli.github.com/) (`gh`) - must be authenticated
-- [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
 - [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) _(recommended)_
 - [Nerd Font](https://www.nerdfonts.com/) _(recommended for icons)_
 - [snacks.nvim](https://github.com/folke/snacks.nvim) for enhanced picker _(optional)_
@@ -49,7 +48,6 @@ Install with [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```lua
 {
   "noamsto/resolved.nvim",
-  dependencies = { "nvim-lua/plenary.nvim" },
   event = "VeryLazy",
   opts = {},
 }
@@ -61,7 +59,6 @@ Install with [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```lua
 use {
   "noamsto/resolved.nvim",
-  requires = { "nvim-lua/plenary.nvim" },
   config = function()
     require("resolved").setup()
   end,
@@ -175,7 +172,6 @@ require("resolved.picker").show_issues_picker()
 ```lua
 {
   "noamsto/resolved.nvim",
-  dependencies = { "nvim-lua/plenary.nvim" },
   event = "VeryLazy",
   opts = {},
   config = function(_, opts)
@@ -218,7 +214,7 @@ But when your comment says `TODO: remove when #123 is fixed` and #123 is now clo
 
 ## 🔒 Security
 
-This plugin takes security seriously. All external commands are executed safely via plenary.job with proper argument separation and timeouts. URLs are validated before processing.
+This plugin takes security seriously. All external commands are executed safely via `vim.system` with proper argument separation and timeouts. URLs are validated before processing.
 
 See [SECURITY.md](docs/SECURITY.md) for details. If you discover a vulnerability, please see our [security policy](docs/SECURITY.md#reporting-a-vulnerability).
 

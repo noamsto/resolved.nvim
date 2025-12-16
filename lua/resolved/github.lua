@@ -1,5 +1,3 @@
-local Job = require("plenary.job")
-
 ---@class resolved.IssueState
 ---@field state "open"|"closed"|"merged"
 ---@field state_reason? string For closed issues: "completed", "not_planned", "reopened"
@@ -24,24 +22,20 @@ function M.check_auth_async(callback)
     return
   end
 
-  Job:new({
-    command = "gh",
-    args = { "auth", "status" },
-    on_exit = function(j, code)
-      vim.schedule(function()
-        if code == 0 then
-          callback(true, nil)
-        else
-          local stderr = table.concat(j:stderr_result(), "\n")
-          local msg = "GitHub CLI not authenticated. Run: gh auth login"
-          if stderr ~= "" then
-            msg = msg .. "\n" .. stderr
-          end
-          callback(false, msg)
+  vim.system({ "gh", "auth", "status" }, {}, function(obj)
+    vim.schedule(function()
+      if obj.code == 0 then
+        callback(true, nil)
+      else
+        local stderr = obj.stderr or ""
+        local msg = "GitHub CLI not authenticated. Run: gh auth login"
+        if stderr ~= "" then
+          msg = msg .. "\n" .. stderr
         end
-      end)
-    end,
-  }):start()
+        callback(false, msg)
+      end
+    end)
+  end)
 end
 
 ---Check if gh CLI is available and authenticated (sync version with timeout)
@@ -124,53 +118,47 @@ function M.fetch(owner, repo, number, type, callback)
 
   local jq_filter = build_jq_filter(type)
 
-  Job
-    :new({
-      command = "gh",
-      args = { "api", endpoint, "--jq", jq_filter },
-      on_exit = function(j, return_code)
-        vim.schedule(function()
-          if return_code ~= 0 then
-            local stderr = table.concat(j:stderr_result(), "\n")
-            -- Handle common errors gracefully
-            if stderr:match("404") or stderr:match("Not Found") then
-              callback(string.format("Issue/PR not found: %s/%s#%d", owner, repo, number))
-            elseif stderr:match("401") or stderr:match("403") then
-              callback("GitHub API authentication error. Try: gh auth login")
-            else
-              callback("gh api error: " .. stderr)
-            end
-            return
-          end
+  vim.system({ "gh", "api", endpoint, "--jq", jq_filter }, {}, function(obj)
+    vim.schedule(function()
+      if obj.code ~= 0 then
+        local stderr = obj.stderr or ""
+        -- Handle common errors gracefully
+        if stderr:match("404") or stderr:match("Not Found") then
+          callback(string.format("Issue/PR not found: %s/%s#%d", owner, repo, number))
+        elseif stderr:match("401") or stderr:match("403") then
+          callback("GitHub API authentication error. Try: gh auth login")
+        else
+          callback("gh api error: " .. stderr)
+        end
+        return
+      end
 
-          local output = table.concat(j:result(), "")
-          local ok, data = pcall(vim.json.decode, output)
-          if not ok then
-            callback("Failed to parse GitHub response: " .. output)
-            return
-          end
+      local output = obj.stdout or ""
+      local ok, data = pcall(vim.json.decode, output)
+      if not ok then
+        callback("Failed to parse GitHub response: " .. output)
+        return
+      end
 
-          -- Determine effective state
-          local state = data.state
-          if type == "pr" and data.merged then
-            state = "merged"
-          end
+      -- Determine effective state
+      local state = data.state
+      if type == "pr" and data.merged then
+        state = "merged"
+      end
 
-          ---@type resolved.IssueState
-          local issue_state = {
-            state = state,
-            state_reason = data.state_reason,
-            title = data.title or "",
-            labels = data.labels or {},
-            closed_at = data.closed_at,
-            merged_at = data.merged_at,
-          }
+      ---@type resolved.IssueState
+      local issue_state = {
+        state = state,
+        state_reason = data.state_reason,
+        title = data.title or "",
+        labels = data.labels or {},
+        closed_at = data.closed_at,
+        merged_at = data.merged_at,
+      }
 
-          callback(nil, issue_state)
-        end)
-      end,
-    })
-    :start()
+      callback(nil, issue_state)
+    end)
+  end)
 end
 
 ---Fetch multiple issues/PRs (sequential for simplicity)

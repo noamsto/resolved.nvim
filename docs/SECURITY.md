@@ -27,9 +27,9 @@ The validation ensures:
 
 ### Command Execution
 
-All external commands (`gh` CLI) are executed via plenary.job with:
+All external commands (`gh` CLI) are executed via `vim.system` with:
 - Proper argument array separation (no shell injection)
-- Timeout protection (5 second limit for auth checks)
+- Timeout protection (30 second limit for git operations)
 - Async execution (non-blocking)
 - Stderr/stdout separation for proper error handling
 
