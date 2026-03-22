@@ -1,4 +1,5 @@
 local icons = require("resolved.icons")
+local display = require("resolved.display")
 
 -- Constants
 local MAX_FILE_SIZE_BYTES = 1024 * 1024 -- 1MB - skip files larger than this
@@ -30,6 +31,9 @@ end
 ---@field is_stale boolean
 
 local M = {}
+
+-- Per-file scan cache: file_path -> { mtime = number, refs = FileReference[] }
+local scan_cache = {}
 
 ---Get list of git-tracked files (async)
 ---@param callback fun(err: string?, files: string[]?)
@@ -80,9 +84,8 @@ end
 ---@param file_path string Absolute path to the file to scan
 ---@param callback fun(refs: resolved.FileReference[]) Callback with extracted references
 local function scan_file_async(file_path, callback)
-  local uv = vim.loop
+  local uv = vim.uv
 
-  -- Read file async, then process with treesitter
   uv.fs_open(file_path, "r", 438, function(err_open, fd)
     if err_open or not fd then
       vim.schedule(function()
@@ -100,6 +103,18 @@ local function scan_file_async(file_path, callback)
         return
       end
 
+      local mtime_sec = stat.mtime.sec
+
+      -- Check scan cache before reading file content
+      local cached = scan_cache[file_path]
+      if cached and cached.mtime == mtime_sec then
+        uv.fs_close(fd)
+        vim.schedule(function()
+          callback(cached.refs)
+        end)
+        return
+      end
+
       uv.fs_read(fd, stat.size, 0, function(err_read, data)
         uv.fs_close(fd)
 
@@ -111,7 +126,6 @@ local function scan_file_async(file_path, callback)
         end
 
         vim.schedule(function()
-          -- Check if buffer already exists and is loaded
           local existing_bufnr = vim.fn.bufnr(file_path)
           local was_loaded = existing_bufnr ~= -1 and vim.api.nvim_buf_is_loaded(existing_bufnr)
 
@@ -119,33 +133,27 @@ local function scan_file_async(file_path, callback)
           if was_loaded then
             bufnr = existing_bufnr
           else
-            -- Create scratch buffer and set content directly
-            bufnr = vim.api.nvim_create_buf(false, true) -- nofile, scratch
+            bufnr = vim.api.nvim_create_buf(false, true)
             if not bufnr or bufnr == 0 then
               callback({})
               return
             end
 
-            -- Set buffer content from file data
             local lines = vim.split(data, "\n", { plain = true })
-            -- Remove trailing empty line if file doesn't end with newline
             if lines[#lines] == "" then
               table.remove(lines)
             end
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 
-            -- Detect and set filetype (needed for treesitter)
             local ft = vim.filetype.match({ buf = bufnr, filename = file_path })
             if ft then
               vim.bo[bufnr].filetype = ft
             end
           end
 
-          -- Use the existing scanner (treesitter-based)
           local scanner = require("resolved.scanner")
           local ok, refs = pcall(scanner.scan, bufnr)
 
-          -- Clean up buffer before callback (ensures cleanup even if scan errors)
           if not was_loaded then
             pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
           end
@@ -155,11 +163,11 @@ local function scan_file_async(file_path, callback)
             return
           end
 
-          -- Add file_path to each ref
           for _, ref in ipairs(refs) do
             ref.file_path = file_path
           end
 
+          scan_cache[file_path] = { mtime = mtime_sec, refs = refs }
           callback(refs)
         end)
       end)
@@ -210,7 +218,7 @@ local function scan_files_batched(files, on_progress, callback)
             batch_done = true -- Prevent any late callbacks from triggering
 
             -- Batch complete - throttle progress updates
-            local now = vim.loop.now()
+            local now = vim.uv.now()
             if now - last_progress_time >= PROGRESS_THROTTLE_MS then
               on_progress(completed, #files, #all_refs)
               last_progress_time = now
@@ -292,14 +300,11 @@ local function build_picker_issues(by_url, states)
     local ref = refs[1]
     local state = states[url] or { state = "unknown", title = "Unknown" }
 
-    -- Check if stale (any location has keywords + closed)
     local is_stale = false
-    if state.state == "closed" or state.state == "merged" then
-      for _, r in ipairs(refs) do
-        if r.has_stale_keywords then
-          is_stale = true
-          break
-        end
+    for _, r in ipairs(refs) do
+      if display.is_stale(state, r.has_stale_keywords) then
+        is_stale = true
+        break
       end
     end
 
@@ -319,7 +324,8 @@ local function build_picker_issues(by_url, states)
     issue.text = format_issue(issue)
     issue.file = ref.file_path -- For preview
     issue.pos = { ref.line, ref.col } -- Line and column for preview
-    issue.preview_title = string.format("%s:%d", vim.fn.fnamemodify(ref.file_path, ":~:."), ref.line)
+    issue.preview_title =
+      string.format("%s:%d", vim.fn.fnamemodify(ref.file_path, ":~:."), ref.line)
 
     -- Add highlight group for coloring
     if issue.is_stale then
@@ -412,12 +418,6 @@ local function jump_to_location(location)
   end
 
   local bufnr = vim.api.nvim_get_current_buf()
-  if not vim.api.nvim_buf_is_valid(bufnr) then
-    notify("Buffer became invalid after opening file", vim.log.levels.ERROR)
-    return
-  end
-
-  -- Validate line exists in buffer
   local line_count = vim.api.nvim_buf_line_count(bufnr)
   local target_line = location.line
   if target_line > line_count then
@@ -631,9 +631,7 @@ function M.show_issues_picker(opts)
         { id = notif_id, timeout = false }
       )
 
-      fetch_and_build_issues(by_url, function(fetched, total)
-        -- Progress callback (currently unused, could show)
-      end, function(issues)
+      fetch_and_build_issues(by_url, function() end, function(issues)
         -- Step 5: Replace notification with success message that auto-dismisses
         vim.notify(
           string.format("Found %d issues", #issues),
