@@ -44,52 +44,32 @@ end
 function M.extract_urls(text)
   local matches = {}
 
-  -- Find all issue URLs
-  local search_start = 1
-  while true do
-    local start_pos, end_pos, owner, repo, type_str, number_str =
-      text:find(GITHUB_PATTERN, search_start)
-    if not start_pos then
-      break
-    end
+  local url_patterns = {
+    { pattern = GITHUB_PATTERN, type = "issue" },
+    { pattern = GITHUB_PR_PATTERN, type = "pr" },
+  }
 
-    -- Validate owner and repo components
-    if is_valid_repo_component(owner) and is_valid_repo_component(repo) then
-      table.insert(matches, {
-        url = text:sub(start_pos, end_pos),
-        owner = owner,
-        repo = repo,
-        number = tonumber(number_str),
-        type = "issue",
-        start_col = start_pos - 1, -- Convert to 0-indexed
-        end_col = end_pos, -- 0-indexed exclusive
-      })
-    end
-    search_start = end_pos + 1
-  end
+  for _, pat in ipairs(url_patterns) do
+    local search_start = 1
+    while true do
+      local start_pos, end_pos, owner, repo, _, number_str = text:find(pat.pattern, search_start)
+      if not start_pos then
+        break
+      end
 
-  -- Find all PR URLs
-  search_start = 1
-  while true do
-    local start_pos, end_pos, owner, repo, type_str, number_str =
-      text:find(GITHUB_PR_PATTERN, search_start)
-    if not start_pos then
-      break
+      if is_valid_repo_component(owner) and is_valid_repo_component(repo) then
+        table.insert(matches, {
+          url = text:sub(start_pos, end_pos),
+          owner = owner,
+          repo = repo,
+          number = tonumber(number_str),
+          type = pat.type,
+          start_col = start_pos - 1,
+          end_col = end_pos,
+        })
+      end
+      search_start = end_pos + 1
     end
-
-    -- Validate owner and repo components
-    if is_valid_repo_component(owner) and is_valid_repo_component(repo) then
-      table.insert(matches, {
-        url = text:sub(start_pos, end_pos),
-        owner = owner,
-        repo = repo,
-        number = tonumber(number_str),
-        type = "pr",
-        start_col = start_pos - 1,
-        end_col = end_pos,
-      })
-    end
-    search_start = end_pos + 1
   end
 
   -- Sort by position

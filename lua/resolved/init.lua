@@ -6,22 +6,30 @@ local display = require("resolved.display")
 
 local M = {}
 
--- Internal state
 M._enabled = false
 M._setup_done = false
-M._setup_pending = false -- True while async setup is in progress
-M._setup_generation = 0 -- Incremented on each setup to detect stale callbacks
+M._setup_pending = false
+M._setup_generation = 0
 M._cache = nil ---@type resolved.Cache|nil
 M._debounce_timers = {} ---@type table<integer, uv_timer_t>
 M._augroup = nil ---@type integer|nil
+M._last_changedtick = {} ---@type table<integer, integer>
 
----Check if the plugin is enabled
+---@param timer uv_timer_t
+local function close_timer(timer)
+  pcall(function()
+    if timer:is_closing() == false then
+      timer:stop()
+      timer:close()
+    end
+  end)
+end
+
 ---@return boolean
 function M.is_enabled()
   return M._enabled
 end
 
----Enable the plugin
 function M.enable()
   if M._setup_pending then
     vim.notify("[resolved.nvim] Setup in progress, please wait...", vim.log.levels.INFO)
@@ -38,36 +46,29 @@ function M.enable()
   M.refresh()
 end
 
----Disable the plugin
 ---@param full_reset? boolean If true, also reset setup state (for testing)
 function M.disable(full_reset)
   M._enabled = false
   display.clear_all()
-  -- Cancel pending timers
   for bufnr, timer in pairs(M._debounce_timers) do
-    if timer and timer:is_closing() == false then
-      timer:stop()
-      timer:close()
-    end
+    close_timer(timer)
     M._debounce_timers[bufnr] = nil
   end
 
-  -- Full reset for testing or reconfiguration
   if full_reset then
     M._setup_done = false
     M._setup_pending = false
-    M._setup_generation = M._setup_generation + 1 -- Invalidate any pending callbacks
+    M._setup_generation = M._setup_generation + 1
     M._cache = nil
+    M._last_changedtick = {}
     if M._augroup then
       pcall(vim.api.nvim_del_augroup_by_id, M._augroup)
       M._augroup = nil
     end
-    -- Reset GitHub auth cache
     github._reset_auth_check()
   end
 end
 
----Toggle the plugin
 function M.toggle()
   if M._enabled then
     M.disable()
@@ -76,14 +77,12 @@ function M.toggle()
   end
 end
 
----Clear the cache
 function M.clear_cache()
   if M._cache then
     M._cache:clear()
   end
 end
 
----Refresh the current buffer
 function M.refresh()
   if not M._enabled then
     return
@@ -92,30 +91,20 @@ function M.refresh()
   M._scan_buffer(bufnr)
 end
 
----Refresh all visible buffers
 function M.refresh_all()
   if not M._enabled then
     return
   end
+  local seen = {}
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     local bufnr = vim.api.nvim_win_get_buf(win)
-    M._scan_buffer(bufnr)
+    if not seen[bufnr] then
+      seen[bufnr] = true
+      M._scan_buffer(bufnr)
+    end
   end
 end
 
----Internal: Determine if a reference is stale
----@param state resolved.IssueState
----@param has_stale_keywords boolean
----@return boolean
-local function is_stale(state, has_stale_keywords)
-  -- A reference is "stale" if:
-  -- 1. The issue/PR is closed or merged
-  -- 2. AND the comment contains stale keywords (suggesting it's a workaround)
-  local is_closed = state.state == "closed" or state.state == "merged"
-  return is_closed and has_stale_keywords
-end
-
----Internal: Process scan results and update display
 ---@param bufnr integer
 ---@param refs resolved.Reference[]
 local function process_refs(bufnr, refs)
@@ -123,7 +112,6 @@ local function process_refs(bufnr, refs)
     return
   end
 
-  -- Collect URLs that need fetching
   local to_fetch = {}
   local cached_results = {}
 
@@ -132,17 +120,10 @@ local function process_refs(bufnr, refs)
     if cached then
       cached_results[ref.url] = cached
     else
-      table.insert(to_fetch, {
-        url = ref.url,
-        owner = ref.owner,
-        repo = ref.repo,
-        number = ref.number,
-        type = ref.type,
-      })
+      table.insert(to_fetch, ref)
     end
   end
 
-  -- Function to update display with results
   local function update_display(results)
     if not vim.api.nvim_buf_is_valid(bufnr) then
       return
@@ -159,29 +140,21 @@ local function process_refs(bufnr, refs)
           end_col = ref.end_col,
           url = ref.url,
           state = state,
-          is_stale = is_stale(state, ref.has_stale_keywords),
+          is_stale = display.is_stale(state, ref.has_stale_keywords),
           has_stale_keywords = ref.has_stale_keywords,
         })
       end
     end
 
-    -- Update display safely
-    pcall(function()
-      if vim.api.nvim_buf_is_valid(bufnr) then
-        display.update(bufnr, display_items)
-      end
-    end)
+    pcall(display.update, bufnr, display_items)
   end
 
-  -- If everything is cached, update immediately
   if #to_fetch == 0 then
     update_display(cached_results)
     return
   end
 
-  -- Fetch uncached URLs
   github.fetch_batch(to_fetch, function(fetch_results)
-    -- Merge with cached results
     local all_results = vim.tbl_extend("force", {}, cached_results)
 
     for url, result in pairs(fetch_results) do
@@ -189,7 +162,6 @@ local function process_refs(bufnr, refs)
         M._cache:set(url, result.state)
         all_results[url] = result.state
       elseif result.err then
-        -- Log error but don't block display
         vim.schedule(function()
           vim.notify(string.format("[resolved.nvim] %s", result.err), vim.log.levels.DEBUG)
         end)
@@ -202,7 +174,6 @@ local function process_refs(bufnr, refs)
   end)
 end
 
----Internal: Scan a buffer for references
 ---@param bufnr integer
 function M._scan_buffer(bufnr)
   if not M._enabled or not M._setup_done then
@@ -213,7 +184,6 @@ function M._scan_buffer(bufnr)
     return
   end
 
-  -- Skip special buffers
   local buftype = vim.bo[bufnr].buftype
   if buftype ~= "" then
     return
@@ -228,7 +198,6 @@ function M._scan_buffer(bufnr)
   process_refs(bufnr, refs)
 end
 
----Internal: Debounced scan
 ---@param bufnr integer
 function M._debounced_scan(bufnr)
   if not M._enabled then
@@ -237,24 +206,11 @@ function M._debounced_scan(bufnr)
 
   local cfg = config.get()
 
-  -- Clean up existing timer safely
   local existing = M._debounce_timers[bufnr]
   if existing then
-    -- Use pcall to handle race condition where timer might be closing
-    -- Use explicit == false check since is_closing() can return nil
-    pcall(function()
-      if existing:is_closing() == false then
-        existing:stop()
-      end
-    end)
-    pcall(function()
-      if existing:is_closing() == false then
-        existing:close()
-      end
-    end)
+    close_timer(existing)
   end
 
-  -- Create new timer
   local timer = vim.uv.new_timer()
   M._debounce_timers[bufnr] = timer
 
@@ -264,9 +220,7 @@ function M._debounced_scan(bufnr)
     M._debounce_timers[bufnr] = nil
 
     vim.schedule(function()
-      -- Recheck buffer validity inside schedule
       if not vim.api.nvim_buf_is_valid(bufnr) then
-        M._debounce_timers[bufnr] = nil
         return
       end
       M._scan_buffer(bufnr)
@@ -274,7 +228,6 @@ function M._debounced_scan(bufnr)
   end)
 end
 
----Internal: Set up autocommands
 local function setup_autocmds()
   if M._augroup then
     vim.api.nvim_del_augroup_by_id(M._augroup)
@@ -282,52 +235,47 @@ local function setup_autocmds()
 
   M._augroup = vim.api.nvim_create_augroup("resolved", { clear = true })
 
-  -- Scan on buffer enter
-  vim.api.nvim_create_autocmd("BufEnter", {
-    group = M._augroup,
-    callback = function(args)
-      if M._enabled then
-        M._debounced_scan(args.buf)
-      end
-    end,
-  })
+  for _, event in ipairs({ "BufEnter", "BufWritePost" }) do
+    vim.api.nvim_create_autocmd(event, {
+      group = M._augroup,
+      callback = function(args)
+        if M._enabled then
+          M._last_changedtick[args.buf] = nil
+          M._debounced_scan(args.buf)
+        end
+      end,
+    })
+  end
 
-  -- Scan on save
-  vim.api.nvim_create_autocmd("BufWritePost", {
-    group = M._augroup,
-    callback = function(args)
-      if M._enabled then
-        M._debounced_scan(args.buf)
-      end
-    end,
-  })
-
-  -- Scan on idle
+  -- Skip rescan if buffer content hasn't changed since last scan
   vim.api.nvim_create_autocmd("CursorHold", {
     group = M._augroup,
     callback = function(args)
-      if M._enabled then
-        M._debounced_scan(args.buf)
+      if not M._enabled then
+        return
       end
+      local tick = vim.api.nvim_buf_get_changedtick(args.buf)
+      if M._last_changedtick[args.buf] == tick then
+        return
+      end
+      M._last_changedtick[args.buf] = tick
+      M._debounced_scan(args.buf)
     end,
   })
 
-  -- Clean up on buffer delete
   vim.api.nvim_create_autocmd("BufDelete", {
     group = M._augroup,
     callback = function(args)
       local timer = M._debounce_timers[args.buf]
-      -- Use explicit == false check since is_closing() can return nil
-      if timer and timer:is_closing() == false then
-        timer:stop()
-        timer:close()
+      if timer then
+        close_timer(timer)
       end
       M._debounce_timers[args.buf] = nil
+      M._last_changedtick[args.buf] = nil
     end,
   })
 end
 
----Subcommands for :Resolved
 local subcommands = {
   enable = {
     fn = function()
@@ -375,14 +323,12 @@ local subcommands = {
   },
 }
 
----Internal: Set up user commands
 local function setup_commands()
   vim.api.nvim_create_user_command("Resolved", function(opts)
     local args = opts.fargs
     local subcmd = args[1]
 
     if not subcmd then
-      -- No subcommand: show status
       subcommands.status.fn()
       return
     end
@@ -396,7 +342,7 @@ local function setup_commands()
   end, {
     nargs = "?",
     desc = "resolved.nvim commands",
-    complete = function(arg_lead, cmd_line, cursor_pos)
+    complete = function(arg_lead)
       local names = vim.tbl_keys(subcommands)
       table.sort(names)
 
@@ -411,10 +357,8 @@ local function setup_commands()
   })
 end
 
----Set up the plugin
 ---@param user_config? resolved.Config
 function M.setup(user_config)
-  -- Prevent double initialization
   if M._setup_done then
     vim.notify(
       "[resolved.nvim] Already initialized. Call resolved.disable() first if you want to reconfigure.",
@@ -423,27 +367,21 @@ function M.setup(user_config)
     return
   end
 
-  -- Prevent concurrent setup attempts
   if M._setup_pending then
     vim.notify("[resolved.nvim] Setup already in progress.", vim.log.levels.WARN)
     return
   end
 
-  -- Step 1: Validate and apply configuration (sync, fast)
   config.setup(user_config)
   local cfg = config.get()
 
-  -- Step 2: Setup commands early so users can interact during async init
   setup_commands()
 
-  -- Mark setup as pending with a new generation
   M._setup_pending = true
   M._setup_generation = M._setup_generation + 1
   local my_generation = M._setup_generation
 
-  -- Step 3: Check GitHub auth asynchronously (non-blocking)
   github.check_auth_async(function(ok, err)
-    -- Guard: if this callback is from a stale setup (reset/new setup occurred), abort
     if M._setup_generation ~= my_generation then
       return
     end
@@ -451,19 +389,15 @@ function M.setup(user_config)
     M._setup_pending = false
 
     if not ok then
-      -- Silent fail - user can check :checkhealth resolved for details
       return
     end
 
-    -- Step 4: Initialize cache (after validation passes)
     M._cache = cache_mod.new(cfg.cache_ttl)
 
-    -- Step 5: Setup autocmds (only after all validation passes)
     setup_autocmds()
 
     M._setup_done = true
 
-    -- Step 6: Enable if configured to start enabled
     if cfg.enabled then
       M.enable()
     end

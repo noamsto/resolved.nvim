@@ -25,14 +25,7 @@ local function log_error(msg, level)
   end)
 end
 
--- Define highlight groups
-local highlights_defined = false
 local function define_highlights()
-  if highlights_defined then
-    return
-  end
-
-  -- Stale URL (closed + keywords): bold + warning color (no strikethrough)
   local warn_hl = vim.api.nvim_get_hl(0, { name = "DiagnosticWarn", link = false })
   vim.api.nvim_set_hl(0, "ResolvedStaleUrl", {
     fg = warn_hl.fg,
@@ -40,31 +33,37 @@ local function define_highlights()
     bold = true,
   })
 
-  -- Closed URL (no keywords): italic (subtle but clear)
   local comment_hl = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
   vim.api.nvim_set_hl(0, "ResolvedClosedUrl", {
     fg = comment_hl.fg,
     italic = true,
   })
-
-  highlights_defined = true
 end
 
----Determine the tier for a reference
+---"not_planned" means won't fix — workaround is still needed, so treat as open
+---@param state resolved.IssueState
+---@return boolean
+local function is_resolved(state)
+  return (state.state == "closed" or state.state == "merged")
+    and state.state_reason ~= "not_planned"
+end
+
+---@param state resolved.IssueState
+---@param has_stale_keywords boolean
+---@return boolean
+function M.is_stale(state, has_stale_keywords)
+  return is_resolved(state) and has_stale_keywords
+end
+
 ---@param item resolved.DisplayItem
 ---@return "stale"|"closed"|"open"
 local function get_tier(item)
-  local state = item.state
-  -- "not_planned" means won't fix - workaround still needed, treat as open
-  local is_resolved = (state.state == "closed" or state.state == "merged")
-    and state.state_reason ~= "not_planned"
-
-  if is_resolved and item.has_stale_keywords then
-    return "stale" -- High priority: resolved + keywords
-  elseif is_resolved then
-    return "closed" -- Low priority: resolved, no keywords
+  if is_resolved(item.state) and item.has_stale_keywords then
+    return "stale"
+  elseif is_resolved(item.state) then
+    return "closed"
   else
-    return "open" -- Still open or not_planned
+    return "open"
   end
 end
 
@@ -110,11 +109,15 @@ function M.update(bufnr, items)
 
   local cfg = config.get()
 
+  local url_highlight_groups = {
+    stale = cfg.highlights.stale_url or "ResolvedStaleUrl",
+    closed = cfg.highlights.closed_url or "ResolvedClosedUrl",
+  }
+
   for _, item in ipairs(items) do
     local tier = get_tier(item)
     local text, hl = format_virt_text(item, cfg)
 
-    -- Build extmark options for virtual text (inline, right after URL)
     local extmark_opts = {
       virt_text = { { text, hl } },
       virt_text_pos = "inline",
@@ -122,47 +125,31 @@ function M.update(bufnr, items)
       priority = 100,
     }
 
-    -- Add sign in gutter only for stale (high priority) items
     if tier == "stale" and cfg.signs then
       local sign_icon, sign_hl = icons.stale_sign()
       extmark_opts.sign_text = sign_icon
       extmark_opts.sign_hl_group = sign_hl
     end
 
-    -- Place extmark at end of URL for inline positioning
     local ok, err =
       pcall(vim.api.nvim_buf_set_extmark, bufnr, NS, item.line - 1, item.end_col, extmark_opts)
     if not ok then
       log_error(string.format("Failed to set extmark at %d:%d: %s", item.line, item.end_col, err))
     end
 
-    -- Highlight URL based on tier
-    if tier == "stale" then
-      -- High priority: strikethrough + warning color
-      local ok, err = pcall(vim.api.nvim_buf_set_extmark, bufnr, NS_URL, item.line - 1, item.col, {
+    local url_hl = url_highlight_groups[tier]
+    if url_hl then
+      ok, err = pcall(vim.api.nvim_buf_set_extmark, bufnr, NS_URL, item.line - 1, item.col, {
         end_col = item.end_col,
-        hl_group = cfg.highlights.stale_url or "ResolvedStaleUrl",
+        hl_group = url_hl,
         priority = 200,
       })
       if not ok then
         log_error(
-          string.format("Failed to set stale URL highlight at %d:%d: %s", item.line, item.col, err)
-        )
-      end
-    elseif tier == "closed" then
-      -- Low priority: subtle strikethrough
-      local ok, err = pcall(vim.api.nvim_buf_set_extmark, bufnr, NS_URL, item.line - 1, item.col, {
-        end_col = item.end_col,
-        hl_group = cfg.highlights.closed_url or "ResolvedClosedUrl",
-        priority = 200,
-      })
-      if not ok then
-        log_error(
-          string.format("Failed to set closed URL highlight at %d:%d: %s", item.line, item.col, err)
+          string.format("Failed to set URL highlight at %d:%d: %s", item.line, item.col, err)
         )
       end
     end
-    -- Open issues: no URL highlight, just virtual text
   end
 end
 

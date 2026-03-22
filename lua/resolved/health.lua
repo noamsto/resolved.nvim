@@ -39,7 +39,6 @@ function M.check()
     })
   end
 
-
   -- Check plugin state
   local resolved = require("resolved")
   if resolved._setup_done then

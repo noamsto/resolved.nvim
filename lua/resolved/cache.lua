@@ -38,7 +38,6 @@ function Cache:get(key)
   if self:_is_valid(entry) then
     return entry.data
   end
-  -- Clean up expired entry
   if entry then
     self._entries[key] = nil
   end
@@ -85,11 +84,7 @@ end
 ---Get number of entries (including expired)
 ---@return integer
 function Cache:size()
-  local count = 0
-  for _ in pairs(self._entries) do
-    count = count + 1
-  end
-  return count
+  return vim.tbl_count(self._entries)
 end
 
 return M

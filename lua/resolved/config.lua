@@ -16,7 +16,7 @@ local M = {}
 ---@type resolved.Config
 M.defaults = {
   enabled = true,
-  cache_ttl = 300, -- 5 minutes
+  cache_ttl = 300,
   debounce_ms = 500,
   include_prs = true, -- Include both issues and PRs
   stale_keywords = {
@@ -131,13 +131,6 @@ local function validate_config(user_config)
   if user_config.icons ~= nil then
     if type(user_config.icons) ~= "table" then
       return false, "icons must be a table"
-    end
-  end
-
-  -- Validate tier_priority
-  if user_config.tier_priority ~= nil then
-    if type(user_config.tier_priority) ~= "table" then
-      return false, "tier_priority must be a table"
     end
   end
 

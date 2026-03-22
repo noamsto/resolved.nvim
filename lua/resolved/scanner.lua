@@ -1,5 +1,3 @@
----Scanner module for extracting GitHub issue/PR references from buffers.
----
 ---## Indexing Conventions
 ---All line numbers returned are **1-indexed** (Neovim convention for user-facing APIs).
 ---All column numbers are **0-indexed** (Neovim API convention for nvim_buf_* functions).
@@ -76,40 +74,6 @@ function M.scan(bufnr)
   end
 
   return references
-end
-
----Deduplicate references by URL (keep first occurrence)
----@param refs resolved.Reference[]
----@return resolved.Reference[]
-function M.dedupe_by_url(refs)
-  local seen = {}
-  local result = {}
-
-  for _, ref in ipairs(refs) do
-    if not seen[ref.url] then
-      seen[ref.url] = true
-      table.insert(result, ref)
-    end
-  end
-
-  return result
-end
-
----Get unique URLs from references
----@param refs resolved.Reference[]
----@return string[]
-function M.get_unique_urls(refs)
-  local seen = {}
-  local urls = {}
-
-  for _, ref in ipairs(refs) do
-    if not seen[ref.url] then
-      seen[ref.url] = true
-      table.insert(urls, ref.url)
-    end
-  end
-
-  return urls
 end
 
 return M
